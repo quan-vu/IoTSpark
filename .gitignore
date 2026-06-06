@@ -1,0 +1,13 @@
+# WordPress uploads / generated content
+wp-content/uploads/
+wp-content/upgrade/
+wp-content/cache/
+
+# Credentials (generated at runtime)
+scripts/.api-credentials
+
+# Docker volumes data (local only)
+.docker/
+
+# macOS
+.DS_Store
