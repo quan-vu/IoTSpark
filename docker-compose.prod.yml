@@ -1,0 +1,50 @@
+services:
+  wordpress:
+    image: wordpress:latest
+    ports:
+      - "127.0.0.1:8080:80"
+    environment:
+      WORDPRESS_DB_HOST: host.docker.internal:3306
+      WORDPRESS_DB_NAME: ${MYSQL_DATABASE:-iotspark_wp}
+      WORDPRESS_DB_USER: ${MYSQL_USER:-wpuser}
+      WORDPRESS_DB_PASSWORD: ${MYSQL_PASSWORD:-wppassword}
+      WORDPRESS_TABLE_PREFIX: wp_
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_HOME', 'https://iotspark.io');
+        define('WP_SITEURL', 'https://iotspark.io');
+        if (isset($$_SERVER['HTTP_X_FORWARDED_PROTO']) && $$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
+            $$_SERVER['HTTPS'] = 'on';
+        }
+        define('WP_ENVIRONMENT_TYPE', 'production');
+        define('FORCE_SSL_ADMIN', true);
+    volumes:
+      - wp_data:/var/www/html
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  wpcli:
+    image: wordpress:cli
+    user: "33:33"
+    env_file: .env.prod
+    environment:
+      WORDPRESS_DB_HOST: host.docker.internal:3306
+      WORDPRESS_DB_NAME: ${MYSQL_DATABASE:-iotspark_wp}
+      WORDPRESS_DB_USER: ${MYSQL_USER:-wpuser}
+      WORDPRESS_DB_PASSWORD: ${MYSQL_PASSWORD:-wppassword}
+    volumes:
+      - wp_data:/var/www/html
+      - ./scripts:/scripts
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    profiles:
+      - setup
+
+volumes:
+  wp_data:

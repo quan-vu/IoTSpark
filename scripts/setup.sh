@@ -4,7 +4,6 @@
 
 set -e
 
-# Load env vars from .env if not already set (fallback)
 WP_SITE_URL="${WP_SITE_URL:-http://localhost:8080}"
 WP_SITE_TITLE="${WP_SITE_TITLE:-IoTSpark}"
 WP_ADMIN_USER="${WP_ADMIN_USER:-admin}"
@@ -13,27 +12,33 @@ WP_ADMIN_EMAIL="${WP_ADMIN_EMAIL:-admin@iotspark.local}"
 WP_API_USER="${WP_API_USER:-api-contributor}"
 WP_API_PASSWORD="${WP_API_PASSWORD:-Contributor@2025}"
 WP_API_EMAIL="${WP_API_EMAIL:-contributor@iotspark.local}"
+WP_EDITOR_USER="${WP_EDITOR_USER:-editor}"
+WP_EDITOR_PASSWORD="${WP_EDITOR_PASSWORD:-Editor@IoTSpark2025}"
+WP_EDITOR_EMAIL="${WP_EDITOR_EMAIL:-editor@iotspark.local}"
+WP="/usr/local/bin/wp --path=/var/www/html --allow-root"
 
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
-info()    { echo "${GREEN}[INFO]${NC}  $*"; }
-section() { echo "${CYAN}══ $* ══${NC}"; }
+info()    { printf "${GREEN}[INFO]${NC}  %s\n" "$*"; }
+section() { printf "\n${CYAN}══ %s ══${NC}\n" "$*"; }
 
-# ── 1. Wait for WordPress files to be ready ───────────────────────────────────
+# ── 1. Wait for WordPress files ───────────────────────────────────────────────
 section "Waiting for WordPress"
 for i in $(seq 1 30); do
   [ -f /var/www/html/wp-config.php ] && break
-  echo "  Waiting for wp-config.php... ($i/30)"
+  printf "  Waiting for wp-config.php... (%s/30)\n" "$i"
   sleep 3
 done
-[ -f /var/www/html/wp-config.php ] || { echo "wp-config.php not found"; exit 1; }
+[ -f /var/www/html/wp-config.php ] || { echo "wp-config.php not found after 90s"; exit 1; }
+info "WordPress files ready"
 
-# ── 2. Install WordPress core ─────────────────────────────────────────────────
+# ── 2. Core install ───────────────────────────────────────────────────────────
 section "WordPress Core"
-if wp core is-installed --path=/var/www/html 2>/dev/null; then
-  info "Already installed — skipping core install"
+if $WP core is-installed 2>/dev/null; then
+  info "Already installed — updating siteurl/home to $WP_SITE_URL"
+  $WP option update siteurl "$WP_SITE_URL"
+  $WP option update home "$WP_SITE_URL"
 else
-  wp core install \
-    --path=/var/www/html \
+  $WP core install \
     --url="$WP_SITE_URL" \
     --title="$WP_SITE_TITLE" \
     --admin_user="$WP_ADMIN_USER" \
@@ -43,76 +48,68 @@ else
   info "WordPress installed: $WP_SITE_URL"
 fi
 
-# ── 3. Install & activate Yoast SEO ──────────────────────────────────────────
+# ── 3. Yoast SEO ──────────────────────────────────────────────────────────────
 section "Yoast SEO Plugin"
-if wp plugin is-active wordpress-seo --path=/var/www/html 2>/dev/null; then
-  info "Yoast SEO already active"
+if $WP plugin is-active wordpress-seo 2>/dev/null; then
+  YOAST_VER=$($WP plugin get wordpress-seo --field=version 2>/dev/null)
+  info "Yoast SEO already active (v$YOAST_VER)"
 else
-  wp plugin install wordpress-seo --activate --path=/var/www/html
+  $WP plugin install wordpress-seo --activate
   info "Yoast SEO installed and activated"
 fi
 
-# ── 4. Verify REST API is enabled ────────────────────────────────────────────
-section "REST API"
-# REST API is enabled by default in WordPress 4.7+.
-# Ensure pretty permalinks are set (required for clean REST API URLs).
-CURRENT_PERMALINKS=$(wp option get permalink_structure --path=/var/www/html 2>/dev/null || echo "")
-if [ -z "$CURRENT_PERMALINKS" ]; then
-  wp rewrite structure '/%postname%/' --path=/var/www/html
-  wp rewrite flush --path=/var/www/html
-  info "Permalink structure set to /%postname%/"
-else
-  info "Permalink structure: $CURRENT_PERMALINKS"
-fi
+# ── 4. REST API — set permalinks ──────────────────────────────────────────────
+section "REST API / Permalinks"
+$WP rewrite structure '/%postname%/'
+$WP rewrite flush
+info "Permalink: /%postname%/ — REST API at $WP_SITE_URL/wp-json/wp/v2/"
 
-# Ensure REST API is not disabled
-wp option update blog_public 1 --path=/var/www/html >/dev/null 2>&1 || true
-info "REST API enabled at: $WP_SITE_URL/wp-json/wp/v2/"
-
-# ── 5. Create contributor user ────────────────────────────────────────────────
+# ── 5. Contributor user ───────────────────────────────────────────────────────
 section "Contributor User"
-if wp user get "$WP_API_USER" --path=/var/www/html >/dev/null 2>&1; then
+if $WP user get "$WP_API_USER" >/dev/null 2>&1; then
   info "User '$WP_API_USER' already exists"
 else
-  wp user create "$WP_API_USER" "$WP_API_EMAIL" \
+  $WP user create "$WP_API_USER" "$WP_API_EMAIL" \
     --role=contributor \
-    --user_pass="$WP_API_PASSWORD" \
-    --path=/var/www/html
-  info "Created user: $WP_API_USER (role: contributor)"
+    --user_pass="$WP_API_PASSWORD"
+  info "Created: $WP_API_USER (contributor)"
 fi
 
-# ── 6. Create Application Password for REST API ──────────────────────────────
-section "Application Password (REST API)"
-# Application passwords require WordPress 5.6+ (included in latest)
-# Generate a new application password for the API user
-APP_PASS=$(wp user application-password create "$WP_API_USER" "IoTSpark REST API" \
-  --path=/var/www/html \
-  --porcelain 2>/dev/null || echo "")
-
-if [ -n "$APP_PASS" ]; then
-  info "Application password created for '$WP_API_USER'"
-  echo ""
-  echo "  ┌─────────────────────────────────────────────────────────┐"
-  echo "  │  REST API Credentials                                   │"
-  echo "  │  User:     $WP_API_USER                                 │"
-  echo "  │  App Pass: $APP_PASS                                    │"
-  echo "  │                                                         │"
-  echo "  │  Save this password — it won't be shown again!         │"
-  echo "  └─────────────────────────────────────────────────────────┘"
-  echo ""
-  # Save to a file for verify.sh to use
-  echo "$WP_API_USER:$APP_PASS" > /scripts/.api-credentials
+# ── 6. Editor user ────────────────────────────────────────────────────────────
+section "Editor User"
+if $WP user get "$WP_EDITOR_USER" >/dev/null 2>&1; then
+  info "User '$WP_EDITOR_USER' already exists"
 else
-  info "Application password already exists or creation skipped"
+  $WP user create "$WP_EDITOR_USER" "$WP_EDITOR_EMAIL" \
+    --role=editor \
+    --user_pass="$WP_EDITOR_PASSWORD"
+  info "Created: $WP_EDITOR_USER (editor)"
 fi
 
-# ── 7. Summary ────────────────────────────────────────────────────────────────
+# ── 7. Application passwords ──────────────────────────────────────────────────
+section "Application Passwords (REST API)"
+
+for USERNAME in "$WP_API_USER" "$WP_EDITOR_USER"; do
+  COUNT=$($WP user application-password list "$USERNAME" --format=count 2>/dev/null || echo 0)
+  if [ "$COUNT" -gt 0 ] 2>/dev/null; then
+    info "App password already exists for '$USERNAME' ($COUNT found)"
+  else
+    APP_PASS=$($WP user application-password create "$USERNAME" "IoTSpark REST API" --porcelain 2>/dev/null || echo "")
+    if [ -n "$APP_PASS" ]; then
+      info "Created app password for '$USERNAME': $APP_PASS"
+      echo "${USERNAME}:${APP_PASS}" >> /scripts/.api-credentials
+    fi
+  fi
+done
+
+# ── 8. Summary ────────────────────────────────────────────────────────────────
 section "Setup Complete"
-echo ""
-echo "  WordPress:  $WP_SITE_URL"
-echo "  Admin:      $WP_SITE_URL/wp-admin  ($WP_ADMIN_USER / $WP_ADMIN_PASSWORD)"
-echo "  REST API:   $WP_SITE_URL/wp-json/wp/v2/"
-echo "  API User:   $WP_API_USER (contributor)"
-echo ""
-echo "  Run verify: docker compose run --rm -T wpcli sh /scripts/verify.sh"
-echo ""
+printf "\n"
+printf "  WordPress:    %s\n"  "$WP_SITE_URL"
+printf "  Admin panel:  %s/wp-admin\n" "$WP_SITE_URL"
+printf "  Admin login:  %s / %s\n" "$WP_ADMIN_USER" "$WP_ADMIN_PASSWORD"
+printf "  REST API:     %s/wp-json/wp/v2/\n" "$WP_SITE_URL"
+printf "  Editor user:  %s / %s\n" "$WP_EDITOR_USER" "$WP_EDITOR_PASSWORD"
+printf "\n"
+printf "  Credentials saved to: /scripts/.api-credentials\n"
+printf "\n"

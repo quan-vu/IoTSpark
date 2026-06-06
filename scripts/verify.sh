@@ -79,18 +79,18 @@ else
   pass "GET /wp-json/wp/v2/users → HTTP $USERS_CODE (expected, may require auth)"
 fi
 
-# ── 4. Authenticated REST API — create draft post ────────────────────────────
-section "Authenticated REST API (contributor)"
+# ── 4. Authenticated REST API — contributor creates draft ────────────────────
+section "Authenticated REST API (contributor — create draft)"
 CREDS_FILE="/scripts/.api-credentials"
 if [ -f "$CREDS_FILE" ]; then
-  CREDS=$(cat "$CREDS_FILE")
-  API_USER=$(echo "$CREDS" | cut -d: -f1)
-  API_PASS=$(echo "$CREDS" | cut -d: -f2-)
+  CONTRIB_LINE=$(grep "^${WP_API_USER}:" "$CREDS_FILE" | head -1)
+  CONTRIB_USER=$(echo "$CONTRIB_LINE" | cut -d: -f1)
+  CONTRIB_PASS=$(echo "$CONTRIB_LINE" | cut -d: -f2-)
 
   RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$WP_SITE_URL/wp-json/wp/v2/posts" \
-    -u "$API_USER:$API_PASS" \
+    -u "$CONTRIB_USER:$CONTRIB_PASS" \
     -H "Content-Type: application/json" \
-    -d '{"title":"Verify: REST API Test Post","content":"Created via REST API by contributor user.","status":"draft"}')
+    -d '{"title":"Verify: Contributor Draft Post","content":"Created via REST API by contributor.","status":"draft"}')
 
   HTTP_CODE=$(echo "$RESPONSE" | tail -1)
   BODY=$(echo "$RESPONSE" | head -1)
@@ -98,7 +98,6 @@ if [ -f "$CREDS_FILE" ]; then
   if [ "$HTTP_CODE" = "201" ]; then
     POST_ID=$(echo "$BODY" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
     pass "POST /wp-json/wp/v2/posts → 201 Created (post ID: $POST_ID)"
-    # Clean up test post
     if command -v wp >/dev/null 2>&1 && [ -n "$POST_ID" ]; then
       wp post delete "$POST_ID" --force --path=/var/www/html >/dev/null 2>&1 && \
         pass "Test post deleted (cleanup)"
@@ -111,7 +110,46 @@ else
   echo "${YELLOW}  ⚠${NC}  Credentials file not found — run setup.sh first"
 fi
 
-# ── 5. Yoast SEO REST API namespace ──────────────────────────────────────────
+# ── 5. Editor — CRUD + publish via REST API ───────────────────────────────────
+section "Authenticated REST API (editor — CRUD + publish)"
+WP_EDITOR_USER="${WP_EDITOR_USER:-editor}"
+if [ -f "$CREDS_FILE" ]; then
+  EDITOR_LINE=$(grep "^${WP_EDITOR_USER}:" "$CREDS_FILE" | head -1)
+  EDITOR_USER=$(echo "$EDITOR_LINE" | cut -d: -f1)
+  EDITOR_PASS=$(echo "$EDITOR_LINE" | cut -d: -f2-)
+
+  # CREATE (publish)
+  RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$WP_SITE_URL/wp-json/wp/v2/posts" \
+    -u "$EDITOR_USER:$EDITOR_PASS" \
+    -H "Content-Type: application/json" \
+    -d '{"title":"Verify: Editor Published Post","content":"Published via REST API by editor.","status":"publish"}')
+  HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+  BODY=$(echo "$RESPONSE" | head -1)
+
+  if [ "$HTTP_CODE" = "201" ]; then
+    POST_ID=$(echo "$BODY" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+    pass "CREATE (publish) → 201 Created (post ID: $POST_ID)"
+
+    # UPDATE
+    UPD=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$WP_SITE_URL/wp-json/wp/v2/posts/$POST_ID" \
+      -u "$EDITOR_USER:$EDITOR_PASS" \
+      -H "Content-Type: application/json" \
+      -d '{"title":"Verify: Editor Updated Post"}')
+    [ "$UPD" = "200" ] && pass "UPDATE → 200 OK" || fail "UPDATE → HTTP $UPD"
+
+    # DELETE
+    DEL=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$WP_SITE_URL/wp-json/wp/v2/posts/$POST_ID?force=true" \
+      -u "$EDITOR_USER:$EDITOR_PASS")
+    [ "$DEL" = "200" ] && pass "DELETE → 200 OK" || fail "DELETE → HTTP $DEL"
+  else
+    fail "CREATE (publish) → HTTP $HTTP_CODE"
+    echo "      Response: $BODY" | head -c 300
+  fi
+else
+  echo "${YELLOW}  ⚠${NC}  Credentials file not found — run setup.sh first"
+fi
+
+# ── 6. Yoast SEO REST API namespace ──────────────────────────────────────────
 section "Yoast SEO REST API"
 YOAST_NS=$(curl -s "$WP_SITE_URL/wp-json/" 2>/dev/null | grep -o '"yoast[^"]*"' | head -3)
 if [ -n "$YOAST_NS" ]; then

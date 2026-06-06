@@ -3,8 +3,9 @@ wp-content/uploads/
 wp-content/upgrade/
 wp-content/cache/
 
-# Credentials (generated at runtime)
+# Credentials (generated at runtime or server-only)
 scripts/.api-credentials
+.env.prod
 
 # Docker volumes data (local only)
 .docker/
